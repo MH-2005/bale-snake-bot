@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: snake_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: snake_user
+      POSTGRES_PASSWORD: snake_pass
+      POSTGRES_DB: snake_db
+    # Port 5432 is intentionally NOT exposed to the host for security.
+    # All inter-service communication uses the internal Docker network (snake_net).
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U snake_user -d snake_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - snake_net
+
+  adminer:
+    image: adminer:latest
+    container_name: snake_adminer
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "6721:8080"  # Access via http://localhost:6721 (fixed port comment)
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DEFAULT_DB: snake_db
+      ADMINER_DESIGN: pepa-linha-dark
+    networks:
+      - snake_net
+
+  bot:
+    build: .
+    container_name: snake_bot
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./bot:/app/bot
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - snake_net
+
+volumes:
+  pg_data:
+
+networks:
+  snake_net:
+    driver: bridge
