@@ -124,6 +124,11 @@ async def game_loop(
     Uses a fast refresh cycle (0.15 s) to make controls feel responsive,
     while the snake movement follows the engine's current_delay.
 
+    OPTIMISATION: The Telegram message is only edited when the game state
+    actually changes (snake moves, item consumed, game over).  This drastically
+    reduces API calls and eliminates rate‑limit lag, while keeping button
+    response instant thanks to the fast 0.15 s input polling.
+
     If the user is flagged for auto‑play, the AI controller provides
     direction input automatically every tick until the game ends.
 
@@ -147,6 +152,9 @@ async def game_loop(
     # Check if this user should be auto‑played
     auto_play = is_auto_play_user(user_id)
 
+    # State‑change flag: we only send an update when something visual changed
+    state_changed = False
+
     try:
         while not game.game_over:
             now = time.monotonic()
@@ -154,6 +162,7 @@ async def game_loop(
             # ---------- Inactivity check ----------
             if game.is_timed_out():
                 game.game_over = True
+                state_changed = True          # trigger final update
                 break
 
             # ---------- Auto‑play direction (if applicable) ----------
@@ -168,40 +177,44 @@ async def game_loop(
             if now - last_step >= game.current_delay:
                 game.step()
                 last_step = now
+                state_changed = True          # board has moved
 
             # ---------- Title promotion check ----------
             current_title = get_title(game.score)
             if current_title != previous_title:
                 promotion_text = f"✨ تبریک! حالا تو **{current_title}** هستی! ✨\n"
                 previous_title = current_title
+                state_changed = True          # title line will change
 
-            # ---------- Build output ----------
-            # Get raw rendered board from engine (without title)
-            rendered_raw = game.render()
-            # Inject title into status line
-            lines = rendered_raw.split("\n")
-            for i, line in enumerate(lines):
-                if line.startswith("🏆"):
-                    lines[i] = f"🏅 {current_title}\n{line}"
-                    break
-            # Combine with promotion text (if any)
-            final_text = promotion_text + "\n".join(lines)
+            # ---------- Update the Telegram message ONLY if something changed ----------
+            if state_changed:
+                # Get raw rendered board from engine (without title)
+                rendered_raw = game.render()
+                # Inject title into status line
+                lines = rendered_raw.split("\n")
+                for i, line in enumerate(lines):
+                    if line.startswith("🏆"):
+                        lines[i] = f"🏅 {current_title}\n{line}"
+                        break
+                final_text = promotion_text + "\n".join(lines)
 
-            try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=final_text,
-                    parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=controls_kb,
-                )
-            except TelegramBadRequest as e:
-                if "message is not modified" not in e.message.lower():
-                    logger.warning(f"Edit message failed for {key}: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected edit error for {key}: {e}")
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=final_text,
+                        parse_mode=ParseMode.MARKDOWN,
+                        reply_markup=controls_kb,
+                    )
+                except TelegramBadRequest as e:
+                    if "message is not modified" not in e.message.lower():
+                        logger.warning(f"Edit message failed for {key}: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected edit error for {key}: {e}")
 
-            promotion_text = ""  # Reset to show only once
+                promotion_text = ""
+                state_changed = False
+
             await asyncio.sleep(refresh_interval)
 
     finally:

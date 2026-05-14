@@ -122,7 +122,8 @@ async def main() -> None:
     asyncio.create_task(commands.cleanup_dictionaries())
 
     scheduler = AsyncIOScheduler()
-    setup_scheduler(scheduler)
+    # Pass the bot instance so the daily winner job can send messages to groups
+    setup_scheduler(scheduler, bot)
     scheduler.start()
     logger.info("⚙️ APScheduler started.")
 

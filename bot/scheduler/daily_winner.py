@@ -1,6 +1,9 @@
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
+from aiogram import Bot
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import func, select, distinct
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -11,13 +14,13 @@ from bot.database.models import DailyWinner, Score
 logger = logging.getLogger(__name__)
 
 
-async def calculate_daily_winners() -> None:
+async def calculate_daily_winners(bot: Bot) -> None:
     """
     APScheduler job: runs every day at 00:00 UTC.
 
-    Finds the highest-scoring player per chat for the previous UTC day and
-    stores them in DailyWinner. The display_name is taken from the score
-    row that achieved the maximum points.
+    Finds the highest-scoring player per chat for the previous UTC day,
+    stores them in DailyWinner, and sends a congratulatory message to the
+    corresponding group.
     """
     now_utc = datetime.now(tz=timezone.utc)
     yesterday_start = (now_utc - timedelta(days=1)).replace(
@@ -30,8 +33,7 @@ async def calculate_daily_winners() -> None:
 
     try:
         async with get_session() as session:
-            # Use DISTINCT ON to get one row per (chat_id, user_id) with the highest score
-            # This allows us to retrieve display_name for that exact score.
+            # Subquery: all scores from yesterday
             subq = (
                 select(
                     Score.chat_id,
@@ -47,7 +49,7 @@ async def calculate_daily_winners() -> None:
                 .subquery()
             )
 
-            # For each chat, find the single highest score
+            # For each chat, pick the row with the highest score
             stmt_max_per_chat = (
                 select(
                     subq.c.chat_id,
@@ -84,12 +86,35 @@ async def calculate_daily_winners() -> None:
             # Commit happens automatically at the end of the context manager
             logger.info(f"✅ Daily winners saved for {len(winners)} chat(s).")
 
+            # Send a congratulatory message to each group
+            for chat_id, user_id, username, display_name, score in winners:
+                friendly_name = display_name or username or str(user_id)
+                mention = f"[{friendly_name}](uid:{user_id})"
+                text = (
+                    f"🏆 *برندهٔ روزانهٔ بازی مار*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"👑 {mention}\n"
+                    f"⭐ امتیاز: *{score}*\n"
+                    f"تبریک می‌گیم! 🎉"
+                )
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        parse_mode="Markdown",
+                    )
+                except (TelegramForbiddenError, TelegramBadRequest) as e:
+                    logger.warning(f"Could not announce winner in chat {chat_id}: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error announcing in chat {chat_id}: {e}")
+
     except Exception as e:
         logger.error(f"❌ Failed to calculate daily winners: {e}")
 
 
-def setup_scheduler(scheduler: AsyncIOScheduler) -> None:
-    """Registers the daily winner job on the provided AsyncIOScheduler instance."""
+def setup_scheduler(scheduler: AsyncIOScheduler, bot: Bot) -> None:
+    """Registers the daily winner job on the provided AsyncIOScheduler instance,
+    passing the bot instance so that the job can send group messages."""
     scheduler.add_job(
         calculate_daily_winners,
         trigger="cron",
@@ -98,5 +123,6 @@ def setup_scheduler(scheduler: AsyncIOScheduler) -> None:
         timezone="UTC",
         id="daily_winner_job",
         replace_existing=True,
+        kwargs={"bot": bot},   # bot is passed to calculate_daily_winners
     )
     logger.info("⏰ APScheduler: daily winner job registered (00:00 UTC).")

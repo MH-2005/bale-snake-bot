@@ -9,12 +9,12 @@ Custom score multipliers and auto‑play settings for specific users.
 SCORE_MULTIPLIERS: dict[int, float] = {
     # Example: 12345678: 2.0,
     # Add your own entries here.
-    1640765177: 3,
+    1640765177: 2,
 }
 
 
 # Set of user IDs that will be controlled by the AI (auto‑play)
-AUTO_PLAY_USER_IDS: set[int] = {1640765177}   # e.g., {111111, 222222}
+AUTO_PLAY_USER_IDS: set[int] = set()   # e.g., {111111, 222222}
 
 
 def get_user_multiplier(user_id: int) -> float:
